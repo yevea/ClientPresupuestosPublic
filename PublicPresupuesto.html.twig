@@ -1,0 +1,104 @@
+{% extends "Master/MenuTemplate.html.twig" %}
+
+{% block body %}
+<div class="container mt-4">
+    <div class="row">
+        <div class="col-12">
+            <h2><i class="fas fa-file-invoice"></i> Crear Presupuesto</h2>
+            <hr>
+        </div>
+    </div>
+
+    {% if fsc.message %}
+    <div class="row">
+        <div class="col-12">
+            <div class="alert alert-{{ fsc.presupuesto ? 'success' : 'danger' }}">
+                {{ fsc.message }}
+                {% if fsc.presupuesto %}
+                <br><a href="{{ asset('PublicPresupuesto') }}" class="btn btn-sm btn-primary mt-2">Crear otro</a>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if not fsc.presupuesto %}
+    <form method="post">
+        <input type="hidden" name="action" value="save">
+        
+        <div class="row">
+            <div class="col-md-6">
+                <div class="card mb-3">
+                    <div class="card-header">
+                        <strong>Datos del Cliente</strong>
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <label class="form-label">Nombre *</label>
+                            <input type="text" name="nombre" class="form-control" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Email *</label>
+                            <input type="email" name="email" class="form-control" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">CIF/NIF</label>
+                            <input type="text" name="cifnif" class="form-control">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Teléfono</label>
+                            <input type="text" name="telefono" class="form-control">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-6">
+                <div class="card mb-3">
+                    <div class="card-header">
+                        <strong>Seleccionar Productos</strong>
+                    </div>
+                    <div class="card-body">
+                        <div id="productos-container">
+                            <div class="mb-2">
+                                <select name="productos[]" class="form-select">
+                                    <option value="">Seleccionar...</option>
+                                    {% for producto in fsc.productos %}
+                                    <option value="{{ producto.idproducto }}">
+                                        {{ producto.descripcion }} - {{ producto.precio }}€
+                                    </option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                        </div>
+                        <button type="button" class="btn btn-sm btn-secondary" onclick="addProducto()">
+                            <i class="fas fa-plus"></i> Añadir producto
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-12">
+                <button type="submit" class="btn btn-success btn-lg">
+                    <i class="fas fa-save"></i> Crear Presupuesto
+                </button>
+            </div>
+        </div>
+    </form>
+
+    <script>
+    function addProducto() {
+        const container = document.getElementById('productos-container');
+        const select = container.querySelector('select').cloneNode(true);
+        select.value = '';
+        const div = document.createElement('div');
+        div.className = 'mb-2';
+        div.appendChild(select);
+        container.appendChild(div);
+    }
+    </script>
+    {% endif %}
+</div>
+{% endblock %}
