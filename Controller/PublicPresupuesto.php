@@ -1,343 +1,196 @@
 <?php
-namespace FacturaScripts\Plugins\ClientPresupuestosPublic\Controller;
+namespace FacturaScripts\Plugins\WooSync\Controller;
 
 use FacturaScripts\Core\Base\Controller;
-use FacturaScripts\Core\Base\DataBase\DataBaseWhere;
-use FacturaScripts\Dinamic\Model\Cliente;
-use FacturaScripts\Dinamic\Model\PresupuestoCliente;
-use FacturaScripts\Dinamic\Model\Producto;
+use FacturaScripts\Core\Base\ControllerPermissions;
+use FacturaScripts\Core\Tools;
+use Symfony\Component\HttpFoundation\Response;
 
-/**
- * Public presupuesto creation
- */
-class PublicPresupuesto extends Controller
+class WooSyncConfig extends Controller
 {
-    public $productos = [];
-    public $message = '';
-    public $presupuesto = null;
-    public $debug = [];
-    public $formData = [];
-
+    public $woocommerce_url = '';
+    public $woocommerce_key = '';
+    public $woocommerce_secret = '';
+    
     public function getPageData(): array
     {
         $pageData = parent::getPageData();
-        $pageData['showonmenu'] = false;
-        $pageData['title'] = 'Crear Presupuesto';
+        $pageData['title'] = 'WooSync Configuration';
+        $pageData['menu'] = 'admin';
+        $pageData['icon'] = 'fas fa-sync-alt';
+        $pageData['showonmenu'] = true;
         return $pageData;
     }
 
-    public function publicCore(&$response)
+    public function privateCore(&$response, $user, $permissions): void
     {
-        parent::publicCore($response);
+        parent::privateCore($response, $user, $permissions);
         
-        // Capture all request info for debugging
-        $this->debug[] = "REQUEST_METHOD: " . $_SERVER['REQUEST_METHOD'];
-        $this->debug[] = "GET params: " . print_r($_GET, true);
-        $this->debug[] = "POST params: " . print_r($_POST, true);
+        // DEBUG: Log what's happening
+        Tools::log()->debug('=== WOO SYNC DEBUG START ===');
+        Tools::log()->debug('Method: ' . $this->request->getMethod());
+        Tools::log()->debug('URL: ' . $this->request->getUri());
         
-        // Load products
-        $this->loadProducts();
+        // Always load settings first - DEBUG version
+        $this->debugLoadSettings();
         
-        // Handle form submission
-        if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'save') {
-            $this->debug[] = "=== FORM SUBMITTED ===";
-            $this->formData = $_POST;
-            $this->savePresupuesto();
-        }
-        
-        // Render HTML
-        $html = $this->getHTMLContent();
-        $response->setContent($html);
-    }
-
-    private function loadProducts()
-    {
-        try {
-            $productoModel = new Producto();
-            $allProducts = $productoModel->all([], ['descripcion' => 'ASC'], 0, 0);
+        // Process POST actions (form submission)
+        if ($this->request->getMethod() === 'POST') {
+            $action = $this->request->request->get('action', '');
+            Tools::log()->debug('POST Action: ' . $action);
             
-            $this->debug[] = "Productos en BD: " . count($allProducts);
-            
-            foreach ($allProducts as $producto) {
-                $variantes = $producto->getVariants();
-                if (!empty($variantes)) {
-                    foreach ($variantes as $variante) {
-                        $this->productos[] = [
-                            'idproducto' => $producto->idproducto,
-                            'referencia' => $variante->referencia,
-                            'descripcion' => $producto->descripcion,
-                            'precio' => $variante->precio
-                        ];
-                    }
-                } else {
-                    $this->productos[] = [
-                        'idproducto' => $producto->idproducto,
-                        'referencia' => $producto->referencia,
-                        'descripcion' => $producto->descripcion,
-                        'precio' => $producto->precio
-                    ];
-                }
-            }
-            
-            $this->debug[] = "Productos cargados: " . count($this->productos);
-        } catch (\Exception $e) {
-            $this->debug[] = "ERROR cargando productos: " . $e->getMessage();
-        }
-    }
-
-    private function savePresupuesto()
-    {
-        try {
-            $nombre = $_POST['nombre'] ?? '';
-            $email = $_POST['email'] ?? '';
-            $cifnif = $_POST['cifnif'] ?? '';
-            $telefono = $_POST['telefono'] ?? '';
-            
-            $this->debug[] = "Nombre: '$nombre', Email: '$email'";
-            
-            if (empty($nombre) || empty($email)) {
-                $this->message = 'Nombre y email son obligatorios';
+            if ($action === 'save') {
+                $this->debugSaveSettings();
+                $this->redirect($this->url() . '?saved=1');
                 return;
             }
-
-            // Get or create client
-            $cliente = new Cliente();
-            $where = [new DataBaseWhere('email', $email)];
-            $existing = $cliente->all($where, [], 0, 1);
+        }
+        
+        // Process GET actions (test, sync buttons)
+        $action = $this->request->get('action', '');
+        Tools::log()->debug('GET Action: ' . $action);
+        
+        if (!empty($action) && $action !== 'save') {
+            $this->processAction($action);
+        }
+        
+        Tools::log()->debug('=== WOO SYNC DEBUG END ===');
+    }
+    
+    private function debugLoadSettings(): void
+    {
+        // DEBUG: Check what Tools::settings returns
+        $url = Tools::settings('WooSync', 'woocommerce_url', 'NOT_FOUND');
+        $key = Tools::settings('WooSync', 'woocommerce_key', 'NOT_FOUND');
+        $secret = Tools::settings('WooSync', 'woocommerce_secret', 'NOT_FOUND');
+        
+        Tools::log()->debug('DEBUG - Tools::settings results:');
+        Tools::log()->debug('  URL: ' . $url);
+        Tools::log()->debug('  Key exists: ' . (!empty($key) && $key !== 'NOT_FOUND' ? 'YES' : 'NO'));
+        Tools::log()->debug('  Secret exists: ' . (!empty($secret) && $secret !== 'NOT_FOUND' ? 'YES' : 'NO'));
+        
+        // Also check database directly
+        $sql = "SELECT * FROM settings WHERE name LIKE 'WooSync%'";
+        $data = $this->dataBase->select($sql);
+        Tools::log()->debug('DEBUG - Database settings: ' . json_encode($data));
+        
+        // Set values
+        $this->woocommerce_url = $url !== 'NOT_FOUND' ? $url : '';
+        $this->woocommerce_key = $key !== 'NOT_FOUND' ? $key : '';
+        $this->woocommerce_secret = $secret !== 'NOT_FOUND' ? $secret : '';
+    }
+    
+    private function debugSaveSettings(): bool
+    {
+        $url = $this->request->request->get('woocommerce_url', '');
+        $key = $this->request->request->get('woocommerce_key', '');
+        $secret = $this->request->request->get('woocommerce_secret', '');
+        
+        Tools::log()->debug('DEBUG - Saving settings:');
+        Tools::log()->debug('  URL to save: ' . $url);
+        Tools::log()->debug('  Key to save: ' . (!empty($key) ? 'SET' : 'EMPTY'));
+        Tools::log()->debug('  Secret to save: ' . (!empty($secret) ? 'SET' : 'EMPTY'));
+        
+        if (empty($url) || empty($key) || empty($secret)) {
+            Tools::log()->error('WooSync: Validation failed');
+            return false;
+        }
+        
+        // Save using Tools::settingsSet
+        Tools::settingsSet('WooSync', 'woocommerce_url', $url);
+        Tools::settingsSet('WooSync', 'woocommerce_key', $key);
+        Tools::settingsSet('WooSync', 'woocommerce_secret', $secret);
+        
+        Tools::log()->info('WooSync: Settings saved to database');
+        
+        // Force database commit
+        if ($this->dataBase->inTransaction()) {
+            $this->dataBase->commit();
+        }
+        
+        // Verify save
+        $savedUrl = Tools::settings('WooSync', 'woocommerce_url', 'NOT_SAVED');
+        Tools::log()->debug('DEBUG - Verify save: ' . $savedUrl);
+        
+        // Update current values
+        $this->woocommerce_url = $url;
+        $this->woocommerce_key = $key;
+        $this->woocommerce_secret = $secret;
+        
+        return true;
+    }
+    
+    private function processAction(string $action): void
+    {
+        switch ($action) {
+            case 'test':
+                $this->testConnection();
+                break;
+            case 'sync':
+                $this->syncAll();
+                break;
+            case 'sync-orders':
+                $this->syncOrders();
+                break;
+            case 'sync-products':
+                $this->syncProducts();
+                break;
+            case 'sync-stock':
+                $this->syncStock();
+                break;
+        }
+    }
+    
+    private function testConnection(): void
+    {
+        Tools::log()->info('WooSync: Testing connection...');
+        
+        if (empty($this->woocommerce_url) || empty($this->woocommerce_key) || empty($this->woocommerce_secret)) {
+            Tools::log()->error('WooSync: Cannot test - settings empty');
+            $this->redirect($this->url() . '?error=' . urlencode('Settings not loaded. Please save again.'));
+            return;
+        }
+        
+        try {
+            $wooApi = new \FacturaScripts\Plugins\WooSync\Lib\WooCommerceAPI();
             
-            if (!empty($existing)) {
-                $cliente = $existing[0];
-                $this->debug[] = "Cliente existente: " . $cliente->codcliente;
+            if ($wooApi->testConnection()) {
+                $this->redirect($this->url() . '?success=' . urlencode('✅ Connection successful!'));
             } else {
-                $cliente->nombre = $nombre;
-                $cliente->razonsocial = $nombre;
-                $cliente->email = $email;
-                $cliente->cifnif = $cifnif;
-                $cliente->telefono1 = $telefono;
-                
-                if (!$cliente->save()) {
-                    $this->message = 'Error al guardar cliente';
-                    $this->debug[] = "ERROR guardando cliente";
-                    return;
-                }
-                $this->debug[] = "Cliente creado: " . $cliente->codcliente;
+                $this->redirect($this->url() . '?error=' . urlencode('❌ Connection failed. Check credentials.'));
             }
-
-            // Create presupuesto
-            $presupuesto = new PresupuestoCliente();
-            $presupuesto->setSubject($cliente);
-            $presupuesto->setDate(date('d-m-Y'), date('H:i:s'));
-            
-            if (!$presupuesto->save()) {
-                $this->message = 'Error al crear presupuesto';
-                $this->debug[] = "ERROR creando presupuesto";
-                return;
-            }
-            
-            $this->debug[] = "Presupuesto creado: ID=" . $presupuesto->idpresupuesto;
-
-            // Add products
-            $productosSeleccionados = $_POST['productos'] ?? [];
-            $cantidades = $_POST['cantidades'] ?? [];
-            
-            $this->debug[] = "Productos seleccionados: " . count($productosSeleccionados);
-            
-            $added = 0;
-            foreach ($productosSeleccionados as $index => $idproducto) {
-                if (empty($idproducto)) continue;
-                
-                $cantidad = isset($cantidades[$index]) ? (float)$cantidades[$index] : 1;
-                
-                $producto = new Producto();
-                if ($producto->loadFromCode($idproducto)) {
-                    $variantes = $producto->getVariants();
-                    $referencia = !empty($variantes) ? $variantes[0]->referencia : $producto->referencia;
-                    
-                    $newLine = $presupuesto->getNewProductLine($referencia);
-                    if ($newLine) {
-                        $newLine->cantidad = $cantidad;
-                        if ($newLine->save()) {
-                            $added++;
-                            $this->debug[] = "Producto añadido: " . $producto->descripcion;
-                        }
-                    }
-                }
-            }
-            
-            $this->debug[] = "Total productos añadidos: $added";
-            
-            if ($presupuesto->save()) {
-                $presupuesto->loadFromCode($presupuesto->primaryColumnValue());
-                $this->presupuesto = $presupuesto;
-                $this->message = 'Presupuesto creado: ' . $presupuesto->codigo;
-                $this->debug[] = "✓ ÉXITO - Código: " . $presupuesto->codigo;
-            }
-
         } catch (\Exception $e) {
-            $this->message = 'Error: ' . $e->getMessage();
-            $this->debug[] = "EXCEPTION: " . $e->getMessage();
+            Tools::log()->error('WooSync: Connection test error: ' . $e->getMessage());
+            $this->redirect($this->url() . '?error=' . urlencode('Connection error: ' . $e->getMessage()));
         }
     }
-
-    private function getHTMLContent(): string
+    
+    private function syncAll(): void
     {
-        ob_start();
-        ?>
-        <!DOCTYPE html>
-        <html lang="es">
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Crear Presupuesto</title>
-            <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
-            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-        </head>
-        <body>
-            <div class="container mt-5">
-                <div class="row justify-content-center">
-                    <div class="col-md-10">
-                        <h2><i class="fas fa-file-invoice text-primary"></i> Crear Presupuesto</h2>
-                        <hr>
-
-                        <!-- DEBUG ALWAYS VISIBLE -->
-                        <div class="alert alert-info">
-                            <strong><i class="fas fa-bug"></i> Debug Info:</strong>
-                            <ul class="mb-0 mt-2" style="font-size: 0.85em; font-family: monospace;">
-                            <?php foreach ($this->debug as $msg): ?>
-                                <li><?= htmlspecialchars($msg) ?></li>
-                            <?php endforeach; ?>
-                            </ul>
-                            <hr>
-                            <small><strong>Productos disponibles:</strong> <?= count($this->productos) ?></small>
-                        </div>
-
-                        <?php if ($this->message): ?>
-                        <div class="alert alert-<?= $this->presupuesto ? 'success' : 'danger' ?>">
-                            <?= htmlspecialchars($this->message) ?>
-                            <?php if ($this->presupuesto): ?>
-                            <br><a href="PublicPresupuesto" class="btn btn-sm btn-primary mt-2">Crear otro</a>
-                            <?php endif; ?>
-                        </div>
-                        <?php endif; ?>
-
-                        <?php if (!$this->presupuesto): ?>
-                        <form method="POST" action="PublicPresupuesto">
-                            <input type="hidden" name="action" value="save">
-                            
-                            <div class="card mb-3">
-                                <div class="card-header bg-primary text-white">
-                                    <strong>Datos del Cliente</strong>
-                                </div>
-                                <div class="card-body">
-                                    <div class="row">
-                                        <div class="col-md-6 mb-3">
-                                            <label>Nombre *</label>
-                                            <input type="text" name="nombre" class="form-control" required
-                                                   value="<?= htmlspecialchars($this->formData['nombre'] ?? '') ?>">
-                                        </div>
-                                        <div class="col-md-6 mb-3">
-                                            <label>Email *</label>
-                                            <input type="email" name="email" class="form-control" required
-                                                   value="<?= htmlspecialchars($this->formData['email'] ?? '') ?>">
-                                        </div>
-                                    </div>
-                                    <div class="row">
-                                        <div class="col-md-6 mb-3">
-                                            <label>CIF/NIF</label>
-                                            <input type="text" name="cifnif" class="form-control"
-                                                   value="<?= htmlspecialchars($this->formData['cifnif'] ?? '') ?>">
-                                        </div>
-                                        <div class="col-md-6 mb-3">
-                                            <label>Teléfono</label>
-                                            <input type="text" name="telefono" class="form-control"
-                                                   value="<?= htmlspecialchars($this->formData['telefono'] ?? '') ?>">
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div class="card mb-3">
-                                <div class="card-header bg-primary text-white">
-                                    <strong>Productos (<?= count($this->productos) ?> disponibles)</strong>
-                                </div>
-                                <div class="card-body">
-                                    <?php if (empty($this->productos)): ?>
-                                        <div class="alert alert-warning">
-                                            ⚠️ No hay productos en la base de datos.
-                                            <br><small>Ve a FacturaScripts > Almacén > Productos y crea algunos productos primero.</small>
-                                        </div>
-                                    <?php else: ?>
-                                        <div id="productos-container">
-                                            <div class="row mb-2 producto-row">
-                                                <div class="col-md-8">
-                                                    <select name="productos[]" class="form-select">
-                                                        <option value="">-- Seleccionar --</option>
-                                                        <?php foreach ($this->productos as $p): ?>
-                                                        <option value="<?= $p['idproducto'] ?>">
-                                                            <?= htmlspecialchars($p['descripcion']) ?>
-                                                            <?php if ($p['referencia']): ?>
-                                                                (<?= htmlspecialchars($p['referencia']) ?>)
-                                                            <?php endif; ?>
-                                                            - <?= number_format($p['precio'], 2) ?>€
-                                                        </option>
-                                                        <?php endforeach; ?>
-                                                    </select>
-                                                </div>
-                                                <div class="col-md-3">
-                                                    <input type="number" name="cantidades[]" class="form-control" 
-                                                           value="1" min="0.01" step="0.01">
-                                                </div>
-                                                <div class="col-md-1">
-                                                    <button type="button" class="btn btn-danger btn-sm w-100 btn-remove" style="display:none;">
-                                                        <i class="fas fa-trash"></i>
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <button type="button" class="btn btn-secondary btn-sm mt-2" onclick="addRow()">
-                                            <i class="fas fa-plus"></i> Añadir producto
-                                        </button>
-                                    <?php endif; ?>
-                                </div>
-                            </div>
-
-                            <button type="submit" class="btn btn-success btn-lg w-100">
-                                <i class="fas fa-check"></i> Crear Presupuesto
-                            </button>
-                        </form>
-
-                        <script>
-                        function addRow() {
-                            const container = document.getElementById('productos-container');
-                            const row = container.querySelector('.producto-row').cloneNode(true);
-                            row.querySelector('select').value = '';
-                            row.querySelector('input').value = '1';
-                            row.querySelector('.btn-remove').style.display = 'block';
-                            container.appendChild(row);
-                            updateButtons();
-                        }
-                        
-                        document.addEventListener('click', function(e) {
-                            if (e.target.closest('.btn-remove')) {
-                                e.target.closest('.producto-row').remove();
-                                updateButtons();
-                            }
-                        });
-                        
-                        function updateButtons() {
-                            const rows = document.querySelectorAll('.producto-row');
-                            rows.forEach((row, i) => {
-                                row.querySelector('.btn-remove').style.display = rows.length > 1 ? 'block' : 'none';
-                            });
-                        }
-                        </script>
-                        <?php endif; ?>
-                    </div>
-                </div>
-            </div>
-        </body>
-        </html>
-        <?php
-        return ob_get_clean();
+        Tools::log()->info('WooSync: Starting full synchronization');
+        $this->redirect($this->url() . '?info=' . urlencode('Sync feature coming soon.'));
+    }
+    
+    private function syncOrders(): void
+    {
+        Tools::log()->info('WooSync: Starting order synchronization');
+        $this->redirect($this->url() . '?info=' . urlencode('Order sync feature coming soon.'));
+    }
+    
+    private function syncProducts(): void
+    {
+        Tools::log()->info('WooSync: Starting product synchronization');
+        $this->redirect($this->url() . '?info=' . urlencode('Product sync feature coming soon.'));
+    }
+    
+    private function syncStock(): void
+    {
+        Tools::log()->info('WooSync: Starting stock synchronization');
+        $this->redirect($this->url() . '?info=' . urlencode('Stock sync feature coming soon.'));
+    }
+    
+    protected function createViews(): void
+    {
+        // Empty
     }
 }
