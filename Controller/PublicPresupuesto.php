@@ -26,167 +26,85 @@ class WooSyncConfig extends Controller
     {
         parent::privateCore($response, $user, $permissions);
         
-        // DEBUG: Log what's happening
-        Tools::log()->debug('=== WOO SYNC DEBUG START ===');
-        Tools::log()->debug('Method: ' . $this->request->getMethod());
-        Tools::log()->debug('URL: ' . $this->request->getUri());
+        // SIMPLE: Load settings from POST or database
+        $this->loadSettings();
         
-        // Always load settings first - DEBUG version
-        $this->debugLoadSettings();
+        // Handle form submission
+        if ($this->request->getMethod() === 'POST' && $this->request->request->get('action') === 'save') {
+            $this->saveSettings();
+        }
         
-        // Process POST actions (form submission)
+        // Handle GET actions
+        $action = $this->request->get('action', '');
+        if ($action === 'test') {
+            $this->testConnection();
+        }
+    }
+    
+    private function loadSettings(): void
+    {
+        // First try POST data (if form was just submitted)
         if ($this->request->getMethod() === 'POST') {
-            $action = $this->request->request->get('action', '');
-            Tools::log()->debug('POST Action: ' . $action);
+            $this->woocommerce_url = $this->request->request->get('woocommerce_url', '');
+            $this->woocommerce_key = $this->request->request->get('woocommerce_key', '');
+            $this->woocommerce_secret = $this->request->request->get('woocommerce_secret', '');
             
-            if ($action === 'save') {
-                $this->debugSaveSettings();
-                $this->redirect($this->url() . '?saved=1');
+            // If POST data exists, use it
+            if (!empty($this->woocommerce_url)) {
                 return;
             }
         }
         
-        // Process GET actions (test, sync buttons)
-        $action = $this->request->get('action', '');
-        Tools::log()->debug('GET Action: ' . $action);
-        
-        if (!empty($action) && $action !== 'save') {
-            $this->processAction($action);
-        }
-        
-        Tools::log()->debug('=== WOO SYNC DEBUG END ===');
+        // Otherwise load from database
+        $this->woocommerce_url = Tools::settings('WooSync', 'woocommerce_url', '');
+        $this->woocommerce_key = Tools::settings('WooSync', 'woocommerce_key', '');
+        $this->woocommerce_secret = Tools::settings('WooSync', 'woocommerce_secret', '');
     }
     
-    private function debugLoadSettings(): void
-    {
-        // DEBUG: Check what Tools::settings returns
-        $url = Tools::settings('WooSync', 'woocommerce_url', 'NOT_FOUND');
-        $key = Tools::settings('WooSync', 'woocommerce_key', 'NOT_FOUND');
-        $secret = Tools::settings('WooSync', 'woocommerce_secret', 'NOT_FOUND');
-        
-        Tools::log()->debug('DEBUG - Tools::settings results:');
-        Tools::log()->debug('  URL: ' . $url);
-        Tools::log()->debug('  Key exists: ' . (!empty($key) && $key !== 'NOT_FOUND' ? 'YES' : 'NO'));
-        Tools::log()->debug('  Secret exists: ' . (!empty($secret) && $secret !== 'NOT_FOUND' ? 'YES' : 'NO'));
-        
-        // Also check database directly
-        $sql = "SELECT * FROM settings WHERE name LIKE 'WooSync%'";
-        $data = $this->dataBase->select($sql);
-        Tools::log()->debug('DEBUG - Database settings: ' . json_encode($data));
-        
-        // Set values
-        $this->woocommerce_url = $url !== 'NOT_FOUND' ? $url : '';
-        $this->woocommerce_key = $key !== 'NOT_FOUND' ? $key : '';
-        $this->woocommerce_secret = $secret !== 'NOT_FOUND' ? $secret : '';
-    }
-    
-    private function debugSaveSettings(): bool
+    private function saveSettings(): void
     {
         $url = $this->request->request->get('woocommerce_url', '');
         $key = $this->request->request->get('woocommerce_key', '');
         $secret = $this->request->request->get('woocommerce_secret', '');
         
-        Tools::log()->debug('DEBUG - Saving settings:');
-        Tools::log()->debug('  URL to save: ' . $url);
-        Tools::log()->debug('  Key to save: ' . (!empty($key) ? 'SET' : 'EMPTY'));
-        Tools::log()->debug('  Secret to save: ' . (!empty($secret) ? 'SET' : 'EMPTY'));
-        
         if (empty($url) || empty($key) || empty($secret)) {
-            Tools::log()->error('WooSync: Validation failed');
-            return false;
+            return;
         }
         
-        // Save using Tools::settingsSet
+        // Save to database
         Tools::settingsSet('WooSync', 'woocommerce_url', $url);
         Tools::settingsSet('WooSync', 'woocommerce_key', $key);
         Tools::settingsSet('WooSync', 'woocommerce_secret', $secret);
-        
-        Tools::log()->info('WooSync: Settings saved to database');
-        
-        // Force database commit
-        if ($this->dataBase->inTransaction()) {
-            $this->dataBase->commit();
-        }
-        
-        // Verify save
-        $savedUrl = Tools::settings('WooSync', 'woocommerce_url', 'NOT_SAVED');
-        Tools::log()->debug('DEBUG - Verify save: ' . $savedUrl);
         
         // Update current values
         $this->woocommerce_url = $url;
         $this->woocommerce_key = $key;
         $this->woocommerce_secret = $secret;
         
-        return true;
-    }
-    
-    private function processAction(string $action): void
-    {
-        switch ($action) {
-            case 'test':
-                $this->testConnection();
-                break;
-            case 'sync':
-                $this->syncAll();
-                break;
-            case 'sync-orders':
-                $this->syncOrders();
-                break;
-            case 'sync-products':
-                $this->syncProducts();
-                break;
-            case 'sync-stock':
-                $this->syncStock();
-                break;
-        }
+        // Simple redirect
+        header('Location: ' . $this->url() . '?saved=1');
+        exit();
     }
     
     private function testConnection(): void
     {
-        Tools::log()->info('WooSync: Testing connection...');
-        
         if (empty($this->woocommerce_url) || empty($this->woocommerce_key) || empty($this->woocommerce_secret)) {
-            Tools::log()->error('WooSync: Cannot test - settings empty');
-            $this->redirect($this->url() . '?error=' . urlencode('Settings not loaded. Please save again.'));
-            return;
+            header('Location: ' . $this->url() . '?error=Please save settings first');
+            exit();
         }
         
         try {
             $wooApi = new \FacturaScripts\Plugins\WooSync\Lib\WooCommerceAPI();
             
             if ($wooApi->testConnection()) {
-                $this->redirect($this->url() . '?success=' . urlencode('✅ Connection successful!'));
+                header('Location: ' . $this->url() . '?success=Connection successful');
             } else {
-                $this->redirect($this->url() . '?error=' . urlencode('❌ Connection failed. Check credentials.'));
+                header('Location: ' . $this->url() . '?error=Connection failed');
             }
         } catch (\Exception $e) {
-            Tools::log()->error('WooSync: Connection test error: ' . $e->getMessage());
-            $this->redirect($this->url() . '?error=' . urlencode('Connection error: ' . $e->getMessage()));
+            header('Location: ' . $this->url() . '?error=' . urlencode($e->getMessage()));
         }
-    }
-    
-    private function syncAll(): void
-    {
-        Tools::log()->info('WooSync: Starting full synchronization');
-        $this->redirect($this->url() . '?info=' . urlencode('Sync feature coming soon.'));
-    }
-    
-    private function syncOrders(): void
-    {
-        Tools::log()->info('WooSync: Starting order synchronization');
-        $this->redirect($this->url() . '?info=' . urlencode('Order sync feature coming soon.'));
-    }
-    
-    private function syncProducts(): void
-    {
-        Tools::log()->info('WooSync: Starting product synchronization');
-        $this->redirect($this->url() . '?info=' . urlencode('Product sync feature coming soon.'));
-    }
-    
-    private function syncStock(): void
-    {
-        Tools::log()->info('WooSync: Starting stock synchronization');
-        $this->redirect($this->url() . '?info=' . urlencode('Stock sync feature coming soon.'));
+        exit();
     }
     
     protected function createViews(): void
